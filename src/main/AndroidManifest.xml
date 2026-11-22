@@ -3,8 +3,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <application
-        android:label="Subtitle Bridge"
-        android:theme="@style/Theme.AppCompat.DayNight.DarkActionBar">
+        android:label="TransGame"
+        android:theme="@style/Theme.AppCompat.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
