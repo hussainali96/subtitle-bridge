@@ -63,7 +63,6 @@ class SubtitleSocket : NanoWSD(8081) {
             color?.let { put("color", it) }
         })
 }
-
 class MainActivity : AppCompatActivity() {
     private lateinit var pages: PageServer
     private lateinit var socket: SubtitleSocket
@@ -164,3 +163,81 @@ class MainActivity : AppCompatActivity() {
 
         styleCard.addView(label("اللون", 13f, MUTED).apply { setPadding(0, dp(14), 0, dp(8)) })
         val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        listOf("#FFFFFF", "#FFD93D", "#4DD0E1").forEach { c ->
+            chips.addView(View(this).apply {
+                background = oval(Color.parseColor(c), true)
+                layoutParams = LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(12) }
+                setOnClickListener { socket.sendStyle(color = c) }
+            })
+        }
+        styleCard.addView(chips)
+        root.addView(styleCard)
+
+        setContentView(ScrollView(this).apply { setBackgroundColor(BG); addView(root) })
+        ui.post(tick)
+    }
+
+    override fun onDestroy() {
+        ui.removeCallbacks(tick); pages.stop(); socket.stop(); super.onDestroy()
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun rounded(color: Int, radius: Int, stroke: Int? = null) = GradientDrawable().apply {
+        setColor(color); cornerRadius = dp(radius).toFloat()
+        stroke?.let { setStroke(dp(1), it) }
+    }
+
+    private fun oval(color: Int, outlined: Boolean) = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL; setColor(color)
+        if (outlined) setStroke(dp(2), STROKE)
+    }
+
+    private fun label(t: String, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
+        text = t; textSize = size; setTextColor(color)
+        if (bold) setTypeface(typeface, Typeface.BOLD)
+    }
+
+    private fun card() = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(CARD, 20, STROKE)
+        setPadding(dp(18), dp(16), dp(18), dp(18))
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(16) }
+    }
+
+    private fun pill(t: String, filled: Boolean, onClick: () -> Unit) = Button(this).apply {
+        text = t; isAllCaps = false; textSize = 16f; stateListAnimator = null
+        setTextColor(if (filled) Color.WHITE else TEXT)
+        background = if (filled) rounded(ACCENT, 14) else rounded(Color.TRANSPARENT, 14, STROKE)
+        layoutParams = LinearLayout.LayoutParams(MATCH, dp(52)).apply { topMargin = dp(14) }
+        setOnClickListener { onClick() }
+    }
+
+    private fun segmented(onPick: (Boolean) -> Unit): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(BG, 12, STROKE)
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+        }
+        fun seg(t: String) = TextView(this).apply {
+            text = t; gravity = Gravity.CENTER; textSize = 15f; setTextColor(TEXT)
+            layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f)
+        }
+        val top = seg("أعلى"); val bottom = seg("أسفل")
+        fun select(isTop: Boolean) {
+            top.background = rounded(if (isTop) ACCENT else Color.TRANSPARENT, 10)
+            bottom.background = rounded(if (!isTop) ACCENT else Color.TRANSPARENT, 10)
+        }
+        top.setOnClickListener { select(true); onPick(true) }
+        bottom.setOnClickListener { select(false); onPick(false) }
+        select(false)
+        row.addView(top); row.addView(bottom)
+        return row
+    }
+
+    private fun localIp(): String =
+        NetworkInterface.getNetworkInterfaces().toList()
+            .flatMap { it.inetAddresses.toList() }
+            .firstOrNull { !it.isLoopbackAddress && it is Inet4Address }
+            ?.hostAddress ?: "؟"
+}
