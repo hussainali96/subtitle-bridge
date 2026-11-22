@@ -70,13 +70,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dot: View
     private lateinit var statusText: TextView
     private val ui = Handler(Looper.getMainLooper())
-
-    private val BG = Color.parseColor("#0E1014")
-    private val CARD = Color.parseColor("#1A1D24")
-    private val STROKE = Color.parseColor("#2A2E38")
-    private val ACCENT = Color.parseColor("#7C5CFF")
-    private val TEXT = Color.parseColor("#EDEFF3")
-    private val MUTED = Color.parseColor("#8A90A0")
+    
+    private val BG = Color.parseColor("#050A1C")
+    private val CARD = Color.parseColor("#0E1736")
+    private val STROKE = Color.parseColor("#1C2A58")
+    private val ACCENT = Color.parseColor("#1A7FE0")
+    private val MUTED = Color.parseColor("#8FA0C8")
     private val OK = Color.parseColor("#2ECC71")
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
