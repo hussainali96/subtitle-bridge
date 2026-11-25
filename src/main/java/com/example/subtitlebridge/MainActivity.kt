@@ -47,10 +47,18 @@ class SubtitleSocket : NanoWSD(8081) {
 
     fun clientCount(): Int = clients.size
 
-    private fun broadcast(json: JSONObject) {
-        val msg = json.toString()
-        clients.forEach { c -> try { c.send(msg) } catch (e: Exception) { clients.remove(c) } }
+    private val sender = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+    Thread(r).apply { isDaemon = true }
+}
+
+private fun broadcast(json: JSONObject) {
+    val msg = json.toString()
+    sender.execute {
+        clients.forEach { c ->
+            try { c.send(msg) } catch (e: Exception) { clients.remove(c) }
+        }
     }
+}
 
     fun sendSubtitle(text: String, speaker: String? = null) = broadcast(
         JSONObject().put("type", "sub").put("text", text).apply { speaker?.let { put("speaker", it) } }
