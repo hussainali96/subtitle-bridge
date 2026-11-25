@@ -22,6 +22,9 @@ import java.io.IOException
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.concurrent.CopyOnWriteArraySet
+import android.content.Intent
+import android.os.Build
+import androidx.core.content.ContextCompat
 
 class PageServer(private val context: Context) : NanoHTTPD(8080) {
     override fun serve(session: IHTTPSession): Response = try {
@@ -72,8 +75,8 @@ private fun broadcast(json: JSONObject) {
         })
 }
 class MainActivity : AppCompatActivity() {
-    private lateinit var pages: PageServer
-    private lateinit var socket: SubtitleSocket
+    private val socket: SubtitleSocket
+    get() = Bridge.socket ?: run { Bridge.start(applicationContext); Bridge.socket!! }
     private lateinit var dot: View
     private lateinit var statusText: TextView
     private val ui = Handler(Looper.getMainLooper())
@@ -90,7 +93,7 @@ class MainActivity : AppCompatActivity() {
 
     private val tick = object : Runnable {
         override fun run() {
-            val n = socket.clientCount()
+            val n = Bridge.socket?.clientCount() ?: 0
             dot.background = oval(if (n > 0) OK else MUTED, false)
             statusText.text = if (n > 0) "الشاشة متصلة" else "بانتظار اتصال الشاشة"
             ui.postDelayed(this, 1000)
@@ -99,8 +102,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        pages = PageServer(this).also { it.start() }
-        socket = SubtitleSocket().also { it.start(0, false) }
+        Bridge.start(applicationContext)
+ContextCompat.startForegroundService(this, Intent(this, BridgeService::class.java))
+if (Build.VERSION.SDK_INT >= 33) {
+    requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+}
         window.statusBarColor = BG
         window.navigationBarColor = BG
 
@@ -186,7 +192,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        ui.removeCallbacks(tick); pages.stop(); socket.stop(); super.onDestroy()
+    ui.removeCallbacks(tick); super.onDestroy()
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
