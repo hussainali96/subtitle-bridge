@@ -92,7 +92,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pages = PageServer(this).also { it.start() }
-        socket = SubtitleSocket().also { it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false) }
+        socket = SubtitleSocket().also { it.start(0, false) }
         window.statusBarColor = BG
         window.navigationBarColor = BG
 
