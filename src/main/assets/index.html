@@ -51,21 +51,26 @@
   }
 
   function connect() {
-    var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-    ws = new WebSocket(proto + location.hostname + ':8081');
-    ws.onopen = function () { dot.className = 'on'; st.textContent = 'متصل'; };
-    ws.onmessage = function (e) {
-      try {
-        var m = JSON.parse(e.data);
-        if (m.type === 'sub') show(m.text, m.speaker);
-        else if (m.type === 'style') style(m);
-      } catch (err) {}
-    };
-    ws.onclose = function () {
-      dot.className = ''; st.textContent = 'غير متصل';
-      setTimeout(connect, 2000);
-    };
-    ws.onerror = function () { ws.close(); };
+  var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  var hb = null;
+  ws = new WebSocket(proto + location.hostname + ':8081');
+  ws.onopen = function () {
+    dot.className = 'on'; st.textContent = 'متصل';
+    hb = setInterval(function () { try { ws.send('hb'); } catch (err) {} }, 2000);
+  };
+  ws.onmessage = function (e) {
+    try {
+      var m = JSON.parse(e.data);
+      if (m.type === 'sub') show(m.text, m.speaker);
+      else if (m.type === 'style') style(m);
+    } catch (err) {}
+  };
+  ws.onclose = function () {
+    clearInterval(hb);
+    dot.className = ''; st.textContent = 'غير متصل';
+    setTimeout(connect, 2000);
+  };
+  ws.onerror = function () { ws.close(); };
   }
   connect();
 })();
