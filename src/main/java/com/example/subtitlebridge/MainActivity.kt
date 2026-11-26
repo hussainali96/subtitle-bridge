@@ -8,14 +8,18 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import fi.iki.elonen.NanoHTTPD
@@ -99,6 +103,21 @@ class MainActivity : AppCompatActivity() {
             return Bridge.socket!!
         }
 
+    private val capture = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val d = r.data
+        if (r.resultCode == RESULT_OK && d != null) {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, TranslateService::class.java)
+                    .putExtra("code", r.resultCode)
+                    .putExtra("data", d)
+            )
+            Toast.makeText(this, "بدأت الترجمة، افتح اللعبة الآن", Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(this, "لم يتم السماح بالتقاط الشاشة", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private val BG = Color.parseColor("#050A1C")
     private val CARD = Color.parseColor("#0E1736")
     private val STROKE = Color.parseColor("#1C2A58")
@@ -130,6 +149,7 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 33) {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+        Config.load(applicationContext)
 
         window.statusBarColor = BG
         window.navigationBarColor = BG
@@ -171,6 +191,24 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "تم النسخ", Toast.LENGTH_SHORT).show()
         })
         root.addView(statusCard)
+
+        val trCard = card()
+        trCard.addView(label("الترجمة التلقائية", 16f, TEXT, true))
+        trCard.addView(label(
+            "اضغط تشغيل، اسمح بالتقاط الشاشة، ثم افتح اللعبة. يقرأ التطبيق الترجمة الإنجليزية من الشاشة ويعرض العربية في أعلى الشاشة.",
+            13f, MUTED
+        ).apply { setPadding(0, dp(8), 0, dp(4)) })
+        val regionLabel = label("", 13f, MUTED).apply { setPadding(0, dp(12), 0, dp(2)) }
+        fun refresh() {
+            regionLabel.text = "منطقة قراءة الترجمة: من ${Config.top}% إلى ${Config.bottom}% من ارتفاع الشاشة"
+        }
+        refresh()
+        trCard.addView(regionLabel)
+        trCard.addView(slider(Config.top) { Config.top = it; Config.save(applicationContext); refresh() })
+        trCard.addView(slider(Config.bottom) { Config.bottom = it; Config.save(applicationContext); refresh() })
+        trCard.addView(pill("تشغيل الترجمة", true) { startTranslation() })
+        trCard.addView(pill("إيقاف", false) { stopTranslation() })
+        root.addView(trCard)
 
         val testCard = card()
         testCard.addView(label("اختبار الترجمة", 16f, TEXT, true))
@@ -235,6 +273,22 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    private fun startTranslation() {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "فعّل «العرض فوق التطبيقات» لـ TransGame ثم ارجع", Toast.LENGTH_LONG).show()
+            startActivity(
+                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+            )
+            return
+        }
+        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        capture.launch(mpm.createScreenCaptureIntent())
+    }
+
+    private fun stopTranslation() {
+        startService(Intent(this, TranslateService::class.java).setAction("STOP"))
+    }
+
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun rounded(color: Int, radius: Int, stroke: Int? = null) = GradientDrawable().apply {
@@ -272,6 +326,21 @@ class MainActivity : AppCompatActivity() {
         background = if (filled) rounded(ACCENT, 14) else rounded(Color.TRANSPARENT, 14, STROKE)
         layoutParams = LinearLayout.LayoutParams(MATCH, dp(52)).apply { topMargin = dp(14) }
         setOnClickListener { onClick() }
+    }
+
+    private fun slider(initial: Int, onChange: (Int) -> Unit) = SeekBar(this).apply {
+        max = 100
+        progress = initial
+        progressTintList = ColorStateList.valueOf(ACCENT)
+        thumbTintList = ColorStateList.valueOf(ACCENT)
+        layoutDirection = View.LAYOUT_DIRECTION_LTR
+        setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                if (fromUser) onChange(p)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
     }
 
     private fun segmented(onPick: (Boolean) -> Unit): LinearLayout {
