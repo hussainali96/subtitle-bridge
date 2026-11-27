@@ -299,12 +299,15 @@ class TranslateService : Service() {
     }
 
     private fun clean(raw: String): String {
-        val t = raw.replace("\n", " ").replace(Regex("\\s+"), " ").trim()
-        if (Regex("[\\u0600-\\u06FF]").containsMatchIn(t)) return ""
-        if (t.count { it.isLetter() } < 3) return ""
-        return t
+    val t = raw.replace("\n", " ").replace(Regex("\\s+"), " ").trim()
+    if (Regex("[\\u0600-\\u06FF]").containsMatchIn(t)) return ""
+    val letters = t.filter { it.isLetter() }
+    if (letters.length < 3) return ""
+    val ascii = letters.count { it in 'A'..'Z' || it in 'a'..'z' }
+    if (ascii.toFloat() / letters.length < 0.95f) return ""
+    return t
     }
-
+    
     private fun handleTexts(list: List<String>) {
         val key = list.joinToString("\n")
         if (key.isEmpty()) {
