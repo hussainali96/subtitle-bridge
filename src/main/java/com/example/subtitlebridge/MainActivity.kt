@@ -95,6 +95,7 @@ class SubtitleSocket : NanoWSD(8081) {
 class MainActivity : AppCompatActivity() {
     private lateinit var dot: View
     private lateinit var statusText: TextView
+    private lateinit var regionLabel: TextView
     private val ui = Handler(Looper.getMainLooper())
 
     private val socket: SubtitleSocket
@@ -195,17 +196,20 @@ class MainActivity : AppCompatActivity() {
         val trCard = card()
         trCard.addView(label("الترجمة التلقائية", 16f, TEXT, true))
         trCard.addView(label(
-            "اضغط تشغيل، اسمح بالتقاط الشاشة، ثم افتح اللعبة. يقرأ التطبيق الترجمة الإنجليزية من الشاشة ويعرض العربية في أعلى الشاشة.",
+            "اضغط تشغيل، اسمح بالتقاط الشاشة، ثم افتح اللعبة. يقرأ التطبيق النص الإنجليزي ويعرض العربية في أعلى الشاشة.",
             13f, MUTED
         ).apply { setPadding(0, dp(8), 0, dp(4)) })
-        val regionLabel = label("", 13f, MUTED).apply { setPadding(0, dp(12), 0, dp(2)) }
-        fun refresh() {
-            regionLabel.text = "منطقة قراءة الترجمة: من ${Config.top}% إلى ${Config.bottom}% من ارتفاع الشاشة"
-        }
-        refresh()
+
+        trCard.addView(label("نطاق القراءة", 13f, MUTED).apply { setPadding(0, dp(12), 0, dp(6)) })
+        trCard.addView(segmented("منطقة محددة", "الشاشة كاملة", !Config.full) { isRegion ->
+            Config.full = !isRegion
+            Config.save(applicationContext)
+            refreshRegion()
+        })
+        regionLabel = label("", 13f, MUTED).apply { setPadding(0, dp(10), 0, dp(2)) }
         trCard.addView(regionLabel)
-        trCard.addView(slider(Config.top) { Config.top = it; Config.save(applicationContext); refresh() })
-        trCard.addView(slider(Config.bottom) { Config.bottom = it; Config.save(applicationContext); refresh() })
+        refreshRegion()
+        trCard.addView(pill("تحديد منطقة الترجمة", false) { pickRegion() })
         trCard.addView(pill("تشغيل الترجمة", true) { startTranslation() })
         trCard.addView(pill("إيقاف", false) { stopTranslation() })
         root.addView(trCard)
@@ -228,10 +232,12 @@ class MainActivity : AppCompatActivity() {
         root.addView(testCard)
 
         val styleCard = card()
-        styleCard.addView(label("مظهر الترجمة", 16f, TEXT, true))
+        styleCard.addView(label("مظهر الترجمة على التلفاز", 16f, TEXT, true))
 
         styleCard.addView(label("الموضع", 13f, MUTED).apply { setPadding(0, dp(14), 0, dp(6)) })
-        styleCard.addView(segmented { isTop -> socket.sendStyle(position = if (isTop) "top" else "bottom") })
+        styleCard.addView(segmented("أعلى", "أسفل", false) { isTop ->
+            socket.sendStyle(position = if (isTop) "top" else "bottom")
+        })
 
         styleCard.addView(label("الحجم", 13f, MUTED).apply { setPadding(0, dp(16), 0, dp(2)) })
         styleCard.addView(SeekBar(this).apply {
@@ -268,19 +274,44 @@ class MainActivity : AppCompatActivity() {
         ui.post(tick)
     }
 
+    override fun onResume() {
+        super.onResume()
+        Config.load(applicationContext)
+        if (::regionLabel.isInitialized) refreshRegion()
+    }
+
     override fun onDestroy() {
         ui.removeCallbacks(tick)
         super.onDestroy()
     }
 
-    private fun startTranslation() {
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "فعّل «العرض فوق التطبيقات» لـ TransGame ثم ارجع", Toast.LENGTH_LONG).show()
-            startActivity(
-                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-            )
-            return
+    private fun pct(x: Float) = (x * 100).toInt()
+
+    private fun refreshRegion() {
+        regionLabel.text = if (Config.full) {
+            "الوضع: الشاشة كاملة (تجريبي، الأفضل لقوائم النص)"
+        } else {
+            "المنطقة: يسار ${pct(Config.l)}% • أعلى ${pct(Config.t)}% • يمين ${pct(Config.r)}% • أسفل ${pct(Config.b)}%"
         }
+    }
+
+    private fun ensureOverlayPermission(): Boolean {
+        if (Settings.canDrawOverlays(this)) return true
+        Toast.makeText(this, "فعّل «العرض فوق التطبيقات» لـ TransGame ثم ارجع", Toast.LENGTH_LONG).show()
+        startActivity(
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+        )
+        return false
+    }
+
+    private fun pickRegion() {
+        if (!ensureOverlayPermission()) return
+        startService(Intent(this, RegionPickerService::class.java))
+        Toast.makeText(this, "افتح اللعبة الآن، تظهر شاشة التحديد بعد 6 ثوانٍ", Toast.LENGTH_LONG).show()
+    }
+
+    private fun startTranslation() {
+        if (!ensureOverlayPermission()) return
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         capture.launch(mpm.createScreenCaptureIntent())
     }
@@ -328,22 +359,12 @@ class MainActivity : AppCompatActivity() {
         setOnClickListener { onClick() }
     }
 
-    private fun slider(initial: Int, onChange: (Int) -> Unit) = SeekBar(this).apply {
-        max = 100
-        progress = initial
-        progressTintList = ColorStateList.valueOf(ACCENT)
-        thumbTintList = ColorStateList.valueOf(ACCENT)
-        layoutDirection = View.LAYOUT_DIRECTION_LTR
-        setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
-                if (fromUser) onChange(p)
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {}
-        })
-    }
-
-    private fun segmented(onPick: (Boolean) -> Unit): LinearLayout {
+    private fun segmented(
+        first: String,
+        second: String,
+        firstSelected: Boolean,
+        onPick: (Boolean) -> Unit
+    ): LinearLayout {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             background = rounded(BG, 12, STROKE)
@@ -356,17 +377,17 @@ class MainActivity : AppCompatActivity() {
             setTextColor(TEXT)
             layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f)
         }
-        val top = seg("أعلى")
-        val bottom = seg("أسفل")
-        fun select(isTop: Boolean) {
-            top.background = rounded(if (isTop) ACCENT else Color.TRANSPARENT, 10)
-            bottom.background = rounded(if (!isTop) ACCENT else Color.TRANSPARENT, 10)
+        val a = seg(first)
+        val b = seg(second)
+        fun select(isFirst: Boolean) {
+            a.background = rounded(if (isFirst) ACCENT else Color.TRANSPARENT, 10)
+            b.background = rounded(if (!isFirst) ACCENT else Color.TRANSPARENT, 10)
         }
-        top.setOnClickListener { select(true); onPick(true) }
-        bottom.setOnClickListener { select(false); onPick(false) }
-        select(false)
-        row.addView(top)
-        row.addView(bottom)
+        a.setOnClickListener { select(true); onPick(true) }
+        b.setOnClickListener { select(false); onPick(false) }
+        select(firstSelected)
+        row.addView(a)
+        row.addView(b)
         return row
     }
 
