@@ -22,6 +22,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Display
 import android.view.Gravity
 import android.view.View
@@ -29,6 +30,7 @@ import android.view.WindowManager
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
@@ -45,6 +47,8 @@ object Config {
     @Volatile var t = 0.72f
     @Volatile var r = 0.95f
     @Volatile var b = 0.97f
+    // true = read the whole screen
+    @Volatile var full = false
     @Volatile var overlayAtTop = true
     val source: String = TranslateLanguage.ENGLISH
     val target: String = TranslateLanguage.ARABIC
@@ -55,15 +59,21 @@ object Config {
         t = p.getFloat("t", 0.72f)
         r = p.getFloat("r", 0.95f)
         b = p.getFloat("b", 0.97f)
+        full = p.getBoolean("full", false)
     }
 
     fun save(ctx: Context) {
         ctx.getSharedPreferences("cfg", Context.MODE_PRIVATE).edit()
-            .putFloat("l", l).putFloat("t", t).putFloat("r", r).putFloat("b", b).apply()
+            .putFloat("l", l).putFloat("t", t).putFloat("r", r).putFloat("b", b)
+            .putBoolean("full", full).apply()
     }
 }
 
 class TranslateService : Service() {
+    private val SIG_W = 64
+    private val SIG_H = 24
+    private val CAPTURE_MAX = 1440
+
     private var projection: MediaProjection? = null
     private var display: VirtualDisplay? = null
     @Volatile private var reader: ImageReader? = null
@@ -85,6 +95,7 @@ class TranslateService : Service() {
 
     private var lastSig: IntArray? = null
     @Volatile private var busy = false
+    private var lastOcrAt = 0L
     private var lastText = ""
     private val cache = HashMap<String, String>()
     @Volatile private var running = false
@@ -160,7 +171,7 @@ class TranslateService : Service() {
         val m = screenMetrics(this)
         dpi = m.densityDpi
         val maxSide = maxOf(m.widthPixels, m.heightPixels)
-        val scale = if (maxSide > 1600) 1600f / maxSide else 1f
+        val scale = if (maxSide > CAPTURE_MAX) CAPTURE_MAX.toFloat() / maxSide else 1f
         width = (m.widthPixels * scale).toInt()
         height = (m.heightPixels * scale).toInt()
     }
@@ -210,7 +221,7 @@ class TranslateService : Service() {
         override fun run() {
             if (!running) return
             try { tick() } catch (e: Exception) { }
-            bg?.postDelayed(this, 250)
+            bg?.postDelayed(this, 150)
         }
     }
 
@@ -226,10 +237,11 @@ class TranslateService : Service() {
             )
             full.copyPixelsFromBuffer(plane.buffer)
 
-            val fl = Config.l.coerceIn(0f, 0.95f)
-            val ft = Config.t.coerceIn(0f, 0.95f)
-            val fr = Config.r.coerceIn(fl + 0.05f, 1f)
-            val fb = Config.b.coerceIn(ft + 0.03f, 1f)
+            val whole = Config.full
+            val fl = if (whole) 0f else Config.l.coerceIn(0f, 0.95f)
+            val ft = if (whole) 0f else Config.t.coerceIn(0f, 0.95f)
+            val fr = if (whole) 1f else Config.r.coerceIn(fl + 0.05f, 1f)
+            val fb = if (whole) 1f else Config.b.coerceIn(ft + 0.03f, 1f)
             val x = (image.width * fl).toInt()
             val y = (image.height * ft).toInt()
             val w = (image.width * (fr - fl)).toInt().coerceAtLeast(8).coerceAtMost(image.width - x)
@@ -241,9 +253,9 @@ class TranslateService : Service() {
             image.close()
         }
 
-        val small = Bitmap.createScaledBitmap(bmp, 64, 16, true)
-        val sig = IntArray(64 * 16)
-        small.getPixels(sig, 0, 64, 0, 0, 64, 16)
+        val small = Bitmap.createScaledBitmap(bmp, SIG_W, SIG_H, true)
+        val sig = IntArray(SIG_W * SIG_H)
+        small.getPixels(sig, 0, SIG_W, 0, 0, SIG_W, SIG_H)
         if (small !== bmp) small.recycle()
         for (i in sig.indices) {
             val c = sig[i]
@@ -251,13 +263,16 @@ class TranslateService : Service() {
         }
         val last = lastSig
         var diff = 255
-        if (last != null) {
+        if (last != null && last.size == sig.size) {
             var s = 0L
             for (i in sig.indices) s += abs(sig[i] - last[i])
             diff = (s / sig.size).toInt()
         }
-        if ((last == null || diff >= 4) && !busy) {
+        val now = SystemClock.elapsedRealtime()
+        val gap = if (Config.full) 800L else 0L
+        if ((last == null || diff >= 4) && !busy && now - lastOcrAt >= gap) {
             lastSig = sig
+            lastOcrAt = now
             busy = true
             runOcr(bmp)
         } else {
@@ -266,8 +281,17 @@ class TranslateService : Service() {
     }
 
     private fun runOcr(bmp: Bitmap) {
+        val whole = Config.full
         recognizer.process(InputImage.fromBitmap(bmp, 0))
-            .addOnSuccessListener { handleText(clean(it.text)) }
+            .addOnSuccessListener { res ->
+                val list: List<String> = if (whole) {
+                    res.textBlocks.map { b -> clean(b.text) }.filter { s -> s.isNotEmpty() }.take(6)
+                } else {
+                    val s = clean(res.text)
+                    if (s.isEmpty()) emptyList() else listOf(s)
+                }
+                handleTexts(list)
+            }
             .addOnCompleteListener {
                 busy = false
                 bmp.recycle()
@@ -281,8 +305,9 @@ class TranslateService : Service() {
         return t
     }
 
-    private fun handleText(t: String) {
-        if (t.isEmpty()) {
+    private fun handleTexts(list: List<String>) {
+        val key = list.joinToString("\n")
+        if (key.isEmpty()) {
             if (lastText.isNotEmpty()) {
                 lastText = ""
                 showText("")
@@ -290,19 +315,25 @@ class TranslateService : Service() {
             }
             return
         }
-        if (t == lastText) return
-        val cached = cache[t]
-        if (cached != null) {
-            lastText = t
-            present(cached)
+        if (key == lastText) return
+
+        val cached = list.map { cache[it] }
+        if (cached.all { it != null }) {
+            lastText = key
+            present(cached.filterNotNull().joinToString("\n"))
             return
         }
+
         val tr = translator
         if (tr == null || !modelReady) return
-        lastText = t
-        tr.translate(t).addOnSuccessListener { out ->
-            cache[t] = out
-            if (t == lastText) present(out)
+        lastText = key
+        val tasks = list.map { s ->
+            val c = cache[s]
+            if (c != null) Tasks.forResult(c)
+            else tr.translate(s).addOnSuccessListener { out -> cache[s] = out }
+        }
+        Tasks.whenAllSuccess<String>(tasks).addOnSuccessListener { outs ->
+            if (key == lastText) present(outs.joinToString("\n"))
         }
     }
 
@@ -327,6 +358,7 @@ class TranslateService : Service() {
             setBackgroundColor(Color.argb(190, 0, 0, 0))
             setPadding(24, 12, 24, 12)
             gravity = Gravity.CENTER
+            maxLines = 8
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             textDirection = View.TEXT_DIRECTION_RTL
             visibility = View.GONE
@@ -349,10 +381,11 @@ class TranslateService : Service() {
 
     private fun showRegionHint() {
         val m = screenMetrics(this)
-        val fl = Config.l.coerceIn(0f, 0.95f)
-        val ft = Config.t.coerceIn(0f, 0.95f)
-        val fr = Config.r.coerceIn(fl + 0.05f, 1f)
-        val fb = Config.b.coerceIn(ft + 0.03f, 1f)
+        val whole = Config.full
+        val fl = if (whole) 0f else Config.l.coerceIn(0f, 0.95f)
+        val ft = if (whole) 0f else Config.t.coerceIn(0f, 0.95f)
+        val fr = if (whole) 1f else Config.r.coerceIn(fl + 0.05f, 1f)
+        val fb = if (whole) 1f else Config.b.coerceIn(ft + 0.03f, 1f)
         val v = View(this).apply {
             background = GradientDrawable().apply {
                 setColor(Color.TRANSPARENT)
